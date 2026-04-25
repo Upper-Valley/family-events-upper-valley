@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Little Explorers - Upper Valley Family Events</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+</head>
+<body style="margin:0">
+  <div id="root"></div>
+  <script type="text/babel">
+    // import { useState, useEffect, useMemo } from "react";
+import * as Papa from "papaparse";
+
+// ============================================================
+// CONFIGURATION — Update these values for your setup
+// ============================================================
+const GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSsKoIHDtrvxn1PZ9O25e5Km8zv6UYtpWYos3LevmH08UH_27TT9Y6n7qC37UWiEQ/pub?gid=266986491&single=true&output=csv"; // See instructions below
+// To connect your Google Sheet:
+// 1. Create a Google Sheet with columns:
+//    Event, Venue, Date, Time, EndTime, Address, Lat, Lng, AgeMin, AgeMax,
+//    Cost, Category, Link, Description, Recurrence, RecurrenceEnd
+//
+//    Recurrence options: leave blank for one-time events, or use:
+//      "weekly"         — every week on the same day
+//      "biweekly"       — every two weeks
+//      "monthly"        — same date each month (e.g., the 15th)
+//      "first_tue"      — first Tuesday of each month (mon/tue/wed/thu/fri/sat/sun)
+//      "second_sat"     — second Saturday of each month
+//      "third_wed"      — third Wednesday, etc.
+//      "last_fri"       — last Friday of each month
+//
+//    RecurrenceEnd: date when the series ends (e.g., "2026-08-31").
+//    Leave blank to auto-generate 3 months of occurrences.
+//
+// 2. Go to File → Share → Publish to web
+// 3. Select "Comma-separated values (.csv)" and click Publish
+// 4. Paste the URL above
+// 5. Remove the SAMPLE_EVENTS below once your sheet is connected
+
+const RECURRENCE_WINDOW_DAYS = 90;
+
+const USER_LAT = 43.642;  // Upper Valley, NH
+const USER_LNG = -72.252;
+
+// ============================================================
+// SAMPLE DATA — Remove once Google Sheet is connected
+// ============================================================
+
+// ============================================================
+// UTILITIES
+// ============================================================
+function getDistance(lat1, lon1, lat2, lon2) {
+  const R = 3959;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon/2) * Math.sin(dLon/2);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+function formatDate(dateStr) {
+  const d = new Date(dateStr + "T00:00:00");
+  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${days[d.getDay()]}, ${months[d.getMonth()]} ${d.getDate()}`;
+}
+
+function formatTime(timeStr) {
+  if (!timeStr) return "";
+  const [h, m] = timeStr.split(":");
+  const hour = parseInt(h);
+  const ampm = hour >= 12 ? "pm" : "am";
+  const display = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour;
+  return `${display}${m !== "00" ? `:${m}` : ""}${ampm}`;
+}
+
+function getCostLabel(cost) {
+  if (cost === 0) return "Free";
+  return `$${cost}`;
+}
+
+// ============================================================
+// RECURRENCE EXPANSION
+// ============================================================
+const DAY_NAMES = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
+
+function getNthWeekdayOfMonth(year, month, dayOfWeek, n) {
+  // n = 1 for first, 2 for second, etc. -1 for last.
+  if (n === -1) {
+    // Last occurrence: start from end of month and work backward
+    const lastDay = new Date(year, month + 1, 0);
+    let d = lastDay.getDate();
+    while (new Date(year, month, d).getDay() !== dayOfWeek) d--;
+    return new Date(year, month, d);
+  }
+  // Nth occurrence: find first, then add weeks
+  let first = 1;
+  while (new Date(year, month, first).getDay() !== dayOfWeek) first++;
+  const date = first + (n - 1) * 7;
+  if (date > new Date(year, month + 1, 0).getDate()) return null;
+  return new Date(year, month, date);
+}
+
+function expandRecurringEvents(events) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const expanded = [];
+
+  for (const event of events) {
+    const recurrence = (event.Recurrence || "").trim().toLowerCase();
+
+    if (!recurrence) {
+      // One-time event — keep as-is
+      expanded.push(event);
+      continue;
+    }
+
+    const startDate = new Date(event.Date + "T00:00:00");
+    const defaultEnd = new Date(today);
+    defaultEnd.setDate(defaultEnd.getDate() + RECURRENCE_WINDOW_DAYS);
+    const endDate = event.RecurrenceEnd
+      ? new Date(event.RecurrenceEnd + "T00:00:00")
+      : defaultEnd;
+
+    // Parse nth-weekday patterns like "first_tue", "second_sat", "last_fri"
+    const nthMatch = recurrence.match(/^(first|second|third|fourth|last)_(sun|mon|tue|wed|thu|fri|sat)$/);
+
+    if (recurrence === "weekly" || recurrence === "biweekly") {
+      const step = recurrence === "biweekly" ? 14 : 7;
+      const cursor = new Date(startDate);
+      while (cursor <= endDate) {
+        if (cursor >= today) {
+          expanded.push({
+            ...event,
+            Date: cursor.toISOString().split("T")[0],
+            _isRecurring: true,
+          });
+        }
+        cursor.setDate(cursor.getDate() + step);
+      }
+    } else if (recurrence === "monthly") {
+      const dayOfMonth = startDate.getDate();
+      const cursor = new Date(startDate);
+      while (cursor <= endDate) {
+        if (cursor >= today) {
+          expanded.push({
+            ...event,
+            Date: cursor.toISOString().split("T")[0],
+            _isRecurring: true,
+          });
+        }
+        cursor.setMonth(cursor.getMonth() + 1);
+        // Handle months that don't have this day (e.g., 31st)
+        cursor.setDate(Math.min(dayOfMonth, new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0).getDate()));
+      }
+    } else if (nthMatch) {
+      const ordinals = { first: 1, second: 2, third: 3, fourth: 4, last: -1 };
+      const nth = ordinals[nthMatch[1]];
+      const dayOfWeek = DAY_NAMES[nthMatch[2]];
+      // Generate from start month to end
+      let year = startDate.getFullYear();
+      let month = startDate.getMonth();
+      while (true) {
+        const occurrence = getNthWeekdayOfMonth(year, month, dayOfWeek, nth);
+        if (occurrence && occurrence > endDate) break;
+        if (occurrence && occurrence >= today && occurrence >= startDate) {
+          expanded.push({
+            ...event,
+            Date: occurrence.toISOString().split("T")[0],
+            _isRecurring: true,
+          });
+        }
+        month++;
+        if (month > 11) { month = 0; year++; }
+        if (new Date(year, month, 1) > endDate) break;
+      }
+    } else {
+      // Unknown recurrence pattern — treat as one-time
+      expanded.push(event);
+    }
+  }
+
+  return expanded;
+}
+
+const CATEGORY_CONFIG = {
+  Library: { emoji: "📚", color: "#5B8C5A" },
+  Nature: { emoji: "🌿", color: "#6B8F71" },
+  Arts: { emoji: "🎨", color: "#C06C84" },
+  Active: { emoji: "⚡", color: "#E08E45" },
+  Science: { emoji: "🔬", color: "#5B7DB1" },
+  Music: { emoji: "🎵", color: "#8B6BAE" },
+  Other: { emoji: "✨", color: "#888" },
+};
+
+// ============================================================
+// COMPONENTS
+// ============================================================
+
+function FilterPill({ label, active, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        padding: "6px 14px",
+        borderRadius: "20px",
+        border: active ? "2px solid #2D4A22" : "2px solid #D5CDBD",
+        background: active ? "#2D4A22" : "transparent",
+        color: active ? "#FFF8EE" : "#5A4E3C",
+        fontFamily: "'Nunito', sans-serif",
+        fontSize: "13px",
+        fontWeight: active ? 700 : 600,
+        cursor: "pointer",
+        transition: "all 0.2s ease",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+function EventCard({ event, distance }) {
+  const cat = CATEGORY_CONFIG[event.Category] || CATEGORY_CONFIG.Other;
+  const isToday = event.Date === new Date().toISOString().split("T")[0];
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const isTomorrow = event.Date === tomorrow.toISOString().split("T")[0];
+
+  return (
+    <div
+      style={{
+        background: "#FFFDF7",
+        borderRadius: "14px",
+        padding: "16px",
+        boxShadow: "0 1px 4px rgba(45,35,20,0.08), 0 0 0 1px rgba(45,35,20,0.04)",
+        display: "flex",
+        flexDirection: "column",
+        gap: "10px",
+        transition: "transform 0.15s ease, box-shadow 0.15s ease",
+        cursor: event.Link ? "pointer" : "default",
+        position: "relative",
+        overflow: "hidden",
+      }}
+      onClick={() => event.Link && window.open(event.Link, "_blank")}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.transform = "translateY(-2px)";
+        e.currentTarget.style.boxShadow = "0 4px 12px rgba(45,35,20,0.12), 0 0 0 1px rgba(45,35,20,0.06)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.transform = "translateY(0)";
+        e.currentTarget.style.boxShadow = "0 1px 4px rgba(45,35,20,0.08), 0 0 0 1px rgba(45,35,20,0.04)";
+      }}
+    >
+      {/* Top row: category + recurring + cost */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <span style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "5px",
+            fontSize: "11px",
+            fontWeight: 700,
+            textTransform: "uppercase",
+            letterSpacing: "0.05em",
+            color: cat.color,
+            fontFamily: "'Nunito', sans-serif",
+          }}>
+            <span style={{ fontSize: "14px" }}>{cat.emoji}</span>
+            {event.Category}
+          </span>
+          {event._isRecurring && (
+            <span style={{
+              fontSize: "10px",
+              fontWeight: 700,
+              color: "#8A7F70",
+              background: "#EDE8DF",
+              padding: "2px 6px",
+              borderRadius: "6px",
+              textTransform: "uppercase",
+              letterSpacing: "0.04em",
+            }}>
+              {(event.Recurrence || "").replace(/_/g, " ")}
+            </span>
+          )}
+        </div>
+        <span style={{
+          background: event.Cost === 0 ? "#E8F5E3" : "#FFF3E0",
+          color: event.Cost === 0 ? "#2D6A2E" : "#BF6C00",
+          padding: "3px 10px",
+          borderRadius: "12px",
+          fontSize: "12px",
+          fontWeight: 700,
+          fontFamily: "'Nunito', sans-serif",
+        }}>
+          {getCostLabel(event.Cost)}
+        </span>
+      </div>
+
+      {/* Event name */}
+      <h3 style={{
+        margin: 0,
+        fontFamily: "'Fraunces', serif",
+        fontSize: "18px",
+        fontWeight: 700,
+        color: "#2A1F0E",
+        lineHeight: 1.25,
+      }}>
+        {event.Event}
+      </h3>
+
+      {/* Venue */}
+      <div style={{
+        fontFamily: "'Nunito', sans-serif",
+        fontSize: "13px",
+        color: "#7A6F60",
+        fontWeight: 600,
+      }}>
+        {event.Venue}
+      </div>
+
+      {/* Description */}
+      {event.Description && (
+        <div style={{
+          fontFamily: "'Nunito', sans-serif",
+          fontSize: "13px",
+          color: "#8A7F70",
+          lineHeight: 1.5,
+        }}>
+          {event.Description}
+        </div>
+      )}
+
+      {/* Bottom row: date/time, age, distance */}
+      <div style={{
+        display: "flex",
+        flexWrap: "wrap",
+        gap: "8px",
+        marginTop: "4px",
+        alignItems: "center",
+      }}>
+        <span style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: "4px",
+          fontSize: "12px",
+          color: isToday ? "#C06C33" : isTomorrow ? "#7B6B2E" : "#6B6155",
+          fontWeight: isToday || isTomorrow ? 700 : 600,
+          fontFamily: "'Nunito', sans-serif",
+          background: isToday ? "#FFF0E0" : isTomorrow ? "#FFF8E0" : "#F5F0E8",
+          padding: "3px 8px",
+          borderRadius: "8px",
+        }}>
+          {isToday ? "Today" : isTomorrow ? "Tomorrow" : formatDate(event.Date)}
+          {event.Time && ` · ${formatTime(event.Time)}`}
+          {event.EndTime && `–${formatTime(event.EndTime)}`}
+        </span>
+
+        <span style={{
+          fontSize: "12px",
+          color: "#6B6155",
+          fontFamily: "'Nunito', sans-serif",
+          background: "#F5F0E8",
+          padding: "3px 8px",
+          borderRadius: "8px",
+          fontWeight: 600,
+        }}>
+          Ages {event.AgeMin}–{event.AgeMax}
+        </span>
+
+        <span style={{
+          fontSize: "12px",
+          color: "#6B6155",
+          fontFamily: "'Nunito', sans-serif",
+          background: "#F5F0E8",
+          padding: "3px 8px",
+          borderRadius: "8px",
+          fontWeight: 600,
+        }}>
+          {distance < 1 ? "< 1 mi" : `${distance.toFixed(1)} mi`}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// MAIN APP
+// ============================================================
+export default function FamilyEventsApp() {
+  const [events, setEvents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  // Filters
+  const [ageFilter, setAgeFilter] = useState(null); // null = all
+  const [costFilter, setCostFilter] = useState(null); // null = all, 0 = free, 10 = under $10, 999 = any
+  const [distanceFilter, setDistanceFilter] = useState(null); // null = all, miles
+  const [categoryFilter, setCategoryFilter] = useState(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [timeRange, setTimeRange] = useState("upcoming"); // "upcoming", "today", "thisweek", "nextweek", "thismonth"
+  const [dayFilter, setDayFilter] = useState(null); // null = all, 0 = Sun, 1 = Mon, ... 6 = Sat
+
+  useEffect(() => {
+    if (GOOGLE_SHEET_CSV_URL) {
+      Papa.parse(GOOGLE_SHEET_CSV_URL, {
+        download: true,
+        header: true,
+        complete: (results) => {
+          const parsed = results.data
+            .filter(row => row.Event && row.Date)
+            .map(row => ({
+              ...row,
+              Lat: parseFloat(row.Lat) || 0,
+              Lng: parseFloat(row.Lng) || 0,
+              AgeMin: parseInt(row.AgeMin) || 0,
+              AgeMax: parseInt(row.AgeMax) || 18,
+              Cost: parseFloat(row.Cost) || 0,
+            }));
+          setEvents(expandRecurringEvents(parsed));
+          setLoading(false);
+        },
+        error: (err) => {
+          setError("Couldn't load events. Check your Google Sheet URL.");
+          setLoading(false);
+        }
+      });
+    } else {
+      setEvents(expandRecurringEvents(SAMPLE_EVENTS));
+      setLoading(false);
+    }
+  }, []);
+
+  const eventsWithDistance = useMemo(() => {
+    return events.map(e => ({
+      ...e,
+      distance: getDistance(USER_LAT, USER_LNG, e.Lat, e.Lng)
+    }));
+  }, [events]);
+
+  const filteredEvents = useMemo(() => {
+    let filtered = eventsWithDistance;
+
+    // Time range filter
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayStr = today.toISOString().split("T")[0];
+
+    if (timeRange === "today") {
+      filtered = filtered.filter(e => e.Date === todayStr);
+    } else if (timeRange === "thisweek") {
+      const endOfWeek = new Date(today);
+      endOfWeek.setDate(endOfWeek.getDate() + (7 - today.getDay()));
+      const endStr = endOfWeek.toISOString().split("T")[0];
+      filtered = filtered.filter(e => e.Date >= todayStr && e.Date <= endStr);
+    } else if (timeRange === "nextweek") {
+      const startOfNext = new Date(today);
+      startOfNext.setDate(startOfNext.getDate() + (7 - today.getDay()) + 1);
+      const endOfNext = new Date(startOfNext);
+      endOfNext.setDate(endOfNext.getDate() + 6);
+      const startStr = startOfNext.toISOString().split("T")[0];
+      const endStr = endOfNext.toISOString().split("T")[0];
+      filtered = filtered.filter(e => e.Date >= startStr && e.Date <= endStr);
+    } else if (timeRange === "thismonth") {
+      const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+      const endStr = endOfMonth.toISOString().split("T")[0];
+      filtered = filtered.filter(e => e.Date >= todayStr && e.Date <= endStr);
+    } else {
+      // "upcoming" — all future events
+      filtered = filtered.filter(e => e.Date >= todayStr);
+    }
+
+    // Day of week filter
+    if (dayFilter !== null) {
+      filtered = filtered.filter(e => {
+        const d = new Date(e.Date + "T00:00:00");
+        return d.getDay() === dayFilter;
+      });
+    }
+
+    // Age filter
+    if (ageFilter !== null) {
+      filtered = filtered.filter(e => e.AgeMin <= ageFilter && e.AgeMax >= ageFilter);
+    }
+
+    // Cost filter
+    if (costFilter !== null) {
+      if (costFilter === 0) filtered = filtered.filter(e => e.Cost === 0);
+      else if (costFilter === 10) filtered = filtered.filter(e => e.Cost <= 10);
+    }
+
+    // Distance filter
+    if (distanceFilter !== null) {
+      filtered = filtered.filter(e => e.distance <= distanceFilter);
+    }
+
+    // Category filter
+    if (categoryFilter !== null) {
+      filtered = filtered.filter(e => e.Category === categoryFilter);
+    }
+
+    // Search
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      filtered = filtered.filter(e =>
+        e.Event.toLowerCase().includes(q) ||
+        e.Venue.toLowerCase().includes(q) ||
+        (e.Description || "").toLowerCase().includes(q)
+      );
+    }
+
+    // Sort by date, then time
+    filtered.sort((a, b) => {
+      const dateComp = a.Date.localeCompare(b.Date);
+      if (dateComp !== 0) return dateComp;
+      return (a.Time || "").localeCompare(b.Time || "");
+    });
+
+    return filtered;
+  }, [eventsWithDistance, ageFilter, costFilter, distanceFilter, categoryFilter, searchQuery, timeRange, dayFilter]);
+
+  const categories = useMemo(() => {
+    const cats = [...new Set(events.map(e => e.Category))].filter(Boolean);
+    return cats.sort();
+  }, [events]);
+
+  const clearFilters = () => {
+    setAgeFilter(null);
+    setCostFilter(null);
+    setDistanceFilter(null);
+    setCategoryFilter(null);
+    setSearchQuery("");
+    setTimeRange("upcoming");
+    setDayFilter(null);
+  };
+
+  const hasFilters = ageFilter !== null || costFilter !== null || distanceFilter !== null || categoryFilter !== null || searchQuery.trim() || timeRange !== "upcoming" || dayFilter !== null;
+
+  if (loading) {
+    return (
+      <div style={{
+        minHeight: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontFamily: "'Nunito', sans-serif",
+        color: "#7A6F60",
+        background: "#F8F3EB",
+      }}>
+        Loading events...
+      </div>
+    );
+  }
+
+  return (
+    <div style={{
+      minHeight: "100vh",
+      background: "#F8F3EB",
+      fontFamily: "'Nunito', sans-serif",
+    }}>
+      <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,700;9..144,900&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet" />
+
+      {/* Header */}
+      <div style={{
+        background: "linear-gradient(135deg, #2D4A22 0%, #3D6B32 100%)",
+        padding: "28px 20px 24px",
+        position: "relative",
+        overflow: "hidden",
+      }}>
+        {/* Decorative dots */}
+        <div style={{ position: "absolute", top: 12, right: 20, opacity: 0.15, fontSize: "48px", lineHeight: 1 }}>
+          🌳🌻🦋
+        </div>
+
+        <h1 style={{
+          margin: "0 0 4px",
+          fontFamily: "'Fraunces', serif",
+          fontSize: "26px",
+          fontWeight: 900,
+          color: "#FFFDF7",
+          lineHeight: 1.15,
+          position: "relative",
+        }}>
+          Little Explorers
+        </h1>
+        <p style={{
+          margin: 0,
+          fontSize: "14px",
+          color: "rgba(255,253,247,0.7)",
+          fontWeight: 600,
+          position: "relative",
+        }}>
+          Family events in the Upper Valley
+        </p>
+      </div>
+
+      {/* Search */}
+      <div style={{ padding: "14px 16px 0" }}>
+        <div style={{ position: "relative" }}>
+          <input
+            type="text"
+            placeholder="Search events, venues..."
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            style={{
+              width: "100%",
+              padding: "10px 14px 10px 36px",
+              borderRadius: "12px",
+              border: "2px solid #E5DDD0",
+              background: "#FFFDF7",
+              fontFamily: "'Nunito', sans-serif",
+              fontSize: "14px",
+              fontWeight: 600,
+              color: "#2A1F0E",
+              outline: "none",
+              boxSizing: "border-box",
+              transition: "border-color 0.2s",
+            }}
+            onFocus={e => e.target.style.borderColor = "#2D4A22"}
+            onBlur={e => e.target.style.borderColor = "#E5DDD0"}
+          />
+          <span style={{
+            position: "absolute",
+            left: 12,
+            top: "50%",
+            transform: "translateY(-50%)",
+            fontSize: "16px",
+            opacity: 0.4,
+          }}>🔍</span>
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div style={{ padding: "14px 16px 0" }}>
+        {/* When */}
+        <div style={{ marginBottom: "10px" }}>
+          <div style={{
+            fontSize: "11px",
+            fontWeight: 700,
+            textTransform: "uppercase",
+            letterSpacing: "0.08em",
+            color: "#8A7F70",
+            marginBottom: "6px",
+          }}>When</div>
+          <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+            <FilterPill label="All upcoming" active={timeRange === "upcoming"} onClick={() => setTimeRange("upcoming")} />
+            <FilterPill label="Today" active={timeRange === "today"} onClick={() => setTimeRange(timeRange === "today" ? "upcoming" : "today")} />
+            <FilterPill label="This week" active={timeRange === "thisweek"} onClick={() => setTimeRange(timeRange === "thisweek" ? "upcoming" : "thisweek")} />
+            <FilterPill label="Next week" active={timeRange === "nextweek"} onClick={() => setTimeRange(timeRange === "nextweek" ? "upcoming" : "nextweek")} />
+            <FilterPill label="This month" active={timeRange === "thismonth"} onClick={() => setTimeRange(timeRange === "thismonth" ? "upcoming" : "thismonth")} />
+          </div>
+        </div>
+
+        {/* Day of Week */}
+        <div style={{ marginBottom: "10px" }}>
+          <div style={{
+            fontSize: "11px",
+            fontWeight: 700,
+            textTransform: "uppercase",
+            letterSpacing: "0.08em",
+            color: "#8A7F70",
+            marginBottom: "6px",
+          }}>Day</div>
+          <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+            <FilterPill label="Any" active={dayFilter === null} onClick={() => setDayFilter(null)} />
+            <FilterPill label="Mon" active={dayFilter === 1} onClick={() => setDayFilter(dayFilter === 1 ? null : 1)} />
+            <FilterPill label="Tue" active={dayFilter === 2} onClick={() => setDayFilter(dayFilter === 2 ? null : 2)} />
+            <FilterPill label="Wed" active={dayFilter === 3} onClick={() => setDayFilter(dayFilter === 3 ? null : 3)} />
+            <FilterPill label="Thu" active={dayFilter === 4} onClick={() => setDayFilter(dayFilter === 4 ? null : 4)} />
+            <FilterPill label="Fri" active={dayFilter === 5} onClick={() => setDayFilter(dayFilter === 5 ? null : 5)} />
+            <FilterPill label="Sat" active={dayFilter === 6} onClick={() => setDayFilter(dayFilter === 6 ? null : 6)} />
+            <FilterPill label="Sun" active={dayFilter === 0} onClick={() => setDayFilter(dayFilter === 0 ? null : 0)} />
+          </div>
+        </div>
+
+        {/* Age */}
+        <div style={{ marginBottom: "10px" }}>
+          <div style={{
+            fontSize: "11px",
+            fontWeight: 700,
+            textTransform: "uppercase",
+            letterSpacing: "0.08em",
+            color: "#8A7F70",
+            marginBottom: "6px",
+          }}>Child's Age</div>
+          <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+            <FilterPill label="All ages" active={ageFilter === null} onClick={() => setAgeFilter(null)} />
+            <FilterPill label="0–2" active={ageFilter === 1} onClick={() => setAgeFilter(ageFilter === 1 ? null : 1)} />
+            <FilterPill label="3–5" active={ageFilter === 4} onClick={() => setAgeFilter(ageFilter === 4 ? null : 4)} />
+            <FilterPill label="6–8" active={ageFilter === 7} onClick={() => setAgeFilter(ageFilter === 7 ? null : 7)} />
+            <FilterPill label="9–12" active={ageFilter === 10} onClick={() => setAgeFilter(ageFilter === 10 ? null : 10)} />
+          </div>
+        </div>
+
+        {/* Cost + Distance row */}
+        <div style={{ display: "flex", gap: "16px", marginBottom: "10px", flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: "140px" }}>
+            <div style={{
+              fontSize: "11px",
+              fontWeight: 700,
+              textTransform: "uppercase",
+              letterSpacing: "0.08em",
+              color: "#8A7F70",
+              marginBottom: "6px",
+            }}>Cost</div>
+            <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+              <FilterPill label="Any" active={costFilter === null} onClick={() => setCostFilter(null)} />
+              <FilterPill label="Free" active={costFilter === 0} onClick={() => setCostFilter(costFilter === 0 ? null : 0)} />
+              <FilterPill label="Under $10" active={costFilter === 10} onClick={() => setCostFilter(costFilter === 10 ? null : 10)} />
+            </div>
+          </div>
+          <div style={{ flex: 1, minWidth: "140px" }}>
+            <div style={{
+              fontSize: "11px",
+              fontWeight: 700,
+              textTransform: "uppercase",
+              letterSpacing: "0.08em",
+              color: "#8A7F70",
+              marginBottom: "6px",
+            }}>Distance</div>
+            <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+              <FilterPill label="Any" active={distanceFilter === null} onClick={() => setDistanceFilter(null)} />
+              <FilterPill label="< 2 mi" active={distanceFilter === 2} onClick={() => setDistanceFilter(distanceFilter === 2 ? null : 2)} />
+              <FilterPill label="< 5 mi" active={distanceFilter === 5} onClick={() => setDistanceFilter(distanceFilter === 5 ? null : 5)} />
+              <FilterPill label="< 15 mi" active={distanceFilter === 15} onClick={() => setDistanceFilter(distanceFilter === 15 ? null : 15)} />
+            </div>
+          </div>
+        </div>
+
+        {/* Categories */}
+        {categories.length > 0 && (
+          <div style={{ marginBottom: "6px" }}>
+            <div style={{
+              fontSize: "11px",
+              fontWeight: 700,
+              textTransform: "uppercase",
+              letterSpacing: "0.08em",
+              color: "#8A7F70",
+              marginBottom: "6px",
+            }}>Category</div>
+            <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+              <FilterPill label="All" active={categoryFilter === null} onClick={() => setCategoryFilter(null)} />
+              {categories.map(cat => (
+                <FilterPill
+                  key={cat}
+                  label={`${(CATEGORY_CONFIG[cat] || CATEGORY_CONFIG.Other).emoji} ${cat}`}
+                  active={categoryFilter === cat}
+                  onClick={() => setCategoryFilter(categoryFilter === cat ? null : cat)}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Clear filters */}
+        {hasFilters && (
+          <button
+            onClick={clearFilters}
+            style={{
+              marginTop: "8px",
+              padding: "4px 12px",
+              background: "none",
+              border: "none",
+              color: "#C06C84",
+              fontFamily: "'Nunito', sans-serif",
+              fontSize: "12px",
+              fontWeight: 700,
+              cursor: "pointer",
+              textDecoration: "underline",
+              textUnderlineOffset: "2px",
+            }}
+          >
+            Clear all filters
+          </button>
+        )}
+      </div>
+
+      {/* Results count */}
+      <div style={{
+        padding: "14px 16px 8px",
+        fontSize: "13px",
+        color: "#8A7F70",
+        fontWeight: 600,
+      }}>
+        {filteredEvents.length} event{filteredEvents.length !== 1 ? "s" : ""} found
+      </div>
+
+      {/* Event list */}
+      <div style={{
+        padding: "0 16px 24px",
+        display: "flex",
+        flexDirection: "column",
+        gap: "12px",
+      }}>
+        {filteredEvents.length === 0 ? (
+          <div style={{
+            textAlign: "center",
+            padding: "40px 20px",
+            color: "#8A7F70",
+          }}>
+            <div style={{ fontSize: "40px", marginBottom: "12px" }}>🌱</div>
+            <div style={{ fontFamily: "'Fraunces', serif", fontSize: "18px", fontWeight: 700, color: "#5A4E3C", marginBottom: "8px" }}>
+              No events match your filters
+            </div>
+            <div style={{ fontSize: "14px", lineHeight: 1.5 }}>
+              Try widening your search or clearing some filters.
+            </div>
+          </div>
+        ) : (
+          filteredEvents.map((event, i) => (
+            <EventCard key={`${event.Event}-${event.Date}-${i}`} event={event} distance={event.distance} />
+          ))
+        )}
+      </div>
+
+      {/* Footer */}
+      <div style={{
+        textAlign: "center",
+        padding: "16px",
+        fontSize: "11px",
+        color: "#B0A898",
+        borderTop: "1px solid #E5DDD0",
+      }}>
+        <div style={{ marginBottom: "4px" }}>
+          Know about an event? <span style={{ color: "#2D4A22", fontWeight: 700, cursor: "pointer" }}>Submit it here</span>
+        </div>
+        <div>Updated with ♥ for Upper Valley families</div>
+      </div>
+
+      {/* Sample data banner */}
+      {!GOOGLE_SHEET_CSV_URL && (
+        <div style={{
+          position: "fixed",
+          bottom: 0,
+          left: 0,
+          right: 0,
+          background: "rgba(45,74,34,0.95)",
+          color: "#FFF8EE",
+          padding: "10px 16px",
+          fontSize: "12px",
+          fontFamily: "'Nunito', sans-serif",
+          fontWeight: 600,
+          textAlign: "center",
+          backdropFilter: "blur(8px)",
+          lineHeight: 1.4,
+        }}>
+          📋 Showing sample data. Connect your Google Sheet to display real events.
+        </div>
+      )}
+    </div>
+  );
+}
+
+  </script>
+  <script type="text/babel">
+    ReactDOM.render(React.createElement(FamilyEventsApp), document.getElementById('root'));
+  </script>
+</body>
+</html>
