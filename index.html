@@ -1,24 +1,28 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Little Explorers - Upper Valley Family Events</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 0; }
+  </style>
 </head>
-<body style="margin:0">
+<body>
   <div id="root"></div>
   <script type="text/babel">
-    // import { useState, useEffect, useMemo } from "react";
-import * as Papa from "papaparse";
+
+
 
 // ============================================================
 // CONFIGURATION — Update these values for your setup
 // ============================================================
-const GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSsKoIHDtrvxn1PZ9O25e5Km8zv6UYtpWYos3LevmH08UH_27TT9Y6n7qC37UWiEQ/pub?gid=266986491&single=true&output=csv"; // See instructions below
+const GOOGLE_SHEET_CSV_URL = ""; // See instructions below
 // To connect your Google Sheet:
 // 1. Create a Google Sheet with columns:
 //    Event, Venue, Date, Time, EndTime, Address, Lat, Lng, AgeMin, AgeMax,
@@ -49,6 +53,22 @@ const USER_LNG = -72.252;
 // ============================================================
 // SAMPLE DATA — Remove once Google Sheet is connected
 // ============================================================
+const SAMPLE_EVENTS = [
+  { Event: "Story Time & Playgroup", Venue: "Enfield Library", Date: "2026-04-27", Time: "10:00", EndTime: "11:00", Address: "23 Main St, Enfield, NH", Lat: 43.541, Lng: -72.143, AgeMin: 0, AgeMax: 5, Cost: 0, Category: "Library", Link: "", Description: "Story time 10-10:30 then playgroup. Outside in summer.", Recurrence: "weekly", RecurrenceEnd: "2026-08-31" },
+  { Event: "Let's Move!", Venue: "Howe Library", Date: "2026-04-27", Time: "10:30", EndTime: "11:00", Address: "13 South St, Hanover, NH", Lat: 43.702, Lng: -72.290, AgeMin: 0, AgeMax: 5, Cost: 0, Category: "Active", Link: "", Description: "Active play session. Stay and play in their playroom after!", Recurrence: "weekly", RecurrenceEnd: "2026-08-31" },
+  { Event: "Waypoint Playgroup", Venue: "Waypoint", Date: "2026-04-27", Time: "9:30", EndTime: "11:00", Address: "Lebanon, NH", Lat: 43.642, Lng: -72.252, AgeMin: 0, AgeMax: 5, Cost: 0, Category: "Active", Link: "", Description: "Drop-in playgroup.", Recurrence: "weekly", RecurrenceEnd: "2026-08-31" },
+  { Event: "Workout with Baby!", Venue: "Kilton Library", Date: "2026-04-28", Time: "11:30", EndTime: "12:30", Address: "80 Main St, West Lebanon, NH", Lat: 43.641, Lng: -72.310, AgeMin: 0, AgeMax: 3, Cost: 0, Category: "Active", Link: "", Description: "Parents workout while babies/kids play!", Recurrence: "weekly", RecurrenceEnd: "2026-08-31" },
+  { Event: "Storytime", Venue: "Howe Library", Date: "2026-04-28", Time: "10:30", EndTime: "11:00", Address: "13 South St, Hanover, NH", Lat: 43.702, Lng: -72.290, AgeMin: 0, AgeMax: 5, Cost: 0, Category: "Library", Link: "", Description: "Stay and play in their playroom after!", Recurrence: "weekly", RecurrenceEnd: "2026-08-31" },
+  { Event: "Jammin' Jellybeans", Venue: "Kilton Library", Date: "2026-04-28", Time: "10:30", EndTime: "11:00", Address: "80 Main St, West Lebanon, NH", Lat: 43.641, Lng: -72.310, AgeMin: 0, AgeMax: 5, Cost: 0, Category: "Music", Link: "", Description: "Music and movement for kids.", Recurrence: "weekly", RecurrenceEnd: "2026-08-31" },
+  { Event: "Story Hour", Venue: "Hartford Library", Date: "2026-04-29", Time: "10:00", EndTime: "10:30", Address: "1587 Maple St, Hartford, VT", Lat: 43.661, Lng: -72.342, AgeMin: 0, AgeMax: 5, Cost: 0, Category: "Library", Link: "", Description: "", Recurrence: "weekly", RecurrenceEnd: "2026-08-31" },
+  { Event: "VINS Forest Storytime", Venue: "VINS Nature Center", Date: "2026-04-29", Time: "10:30", EndTime: "11:00", Address: "149 Natures Way, Quechee, VT", Lat: 43.633, Lng: -72.317, AgeMin: 0, AgeMax: 5, Cost: 8, Category: "Nature", Link: "", Description: "Arrive early — popular! Not every week, check website.", Recurrence: "", RecurrenceEnd: "" },
+  { Event: "Bounce House", Venue: "Hanover Rec Dept", Date: "2026-04-30", Time: "10:00", EndTime: "12:30", Address: "Hanover, NH", Lat: 43.702, Lng: -72.290, AgeMin: 1, AgeMax: 8, Cost: 5, Category: "Active", Link: "", Description: "$5 per walking child.", Recurrence: "weekly", RecurrenceEnd: "2026-08-31" },
+  { Event: "CAOS: Toddlers & Preschoolers", Venue: "AVA Art Gallery", Date: "2026-05-02", Time: "9:30", EndTime: "11:30", Address: "11 Bank St, Lebanon, NH", Lat: 43.642, Lng: -72.252, AgeMin: 1, AgeMax: 5, Cost: 0, Category: "Arts", Link: "", Description: "Community Arts Open Studio for toddlers and preschoolers.", Recurrence: "weekly", RecurrenceEnd: "2026-08-31" },
+  { Event: "Music & Movement", Venue: "Enfield Library", Date: "2026-05-09", Time: "10:30", EndTime: "11:00", Address: "23 Main St, Enfield, NH", Lat: 43.541, Lng: -72.143, AgeMin: 0, AgeMax: 5, Cost: 0, Category: "Music", Link: "", Description: "2nd Saturday of each month.", Recurrence: "second_sat", RecurrenceEnd: "2026-12-31" },
+  { Event: "Music & Movement", Venue: "Enfield Library", Date: "2026-05-23", Time: "10:30", EndTime: "11:00", Address: "23 Main St, Enfield, NH", Lat: 43.541, Lng: -72.143, AgeMin: 0, AgeMax: 5, Cost: 0, Category: "Music", Link: "", Description: "4th Saturday of each month.", Recurrence: "fourth_sat", RecurrenceEnd: "2026-12-31" },
+  { Event: "Montshire Playgroup", Venue: "Montshire Museum", Date: "2026-05-13", Time: "10:00", EndTime: "11:30", Address: "1 Montshire Rd, Norwich, VT", Lat: 43.714, Lng: -72.302, AgeMin: 0, AgeMax: 5, Cost: 0, Category: "Science", Link: "", Description: "Free! Bimonthly — check dates with The Family Place.", Recurrence: "biweekly", RecurrenceEnd: "2026-08-31" },
+  { Event: "Storytime", Venue: "Hartland Library", Date: "2026-05-01", Time: "10:00", EndTime: "11:00", Address: "Hartland, VT", Lat: 43.531, Lng: -72.413, AgeMin: 0, AgeMax: 5, Cost: 0, Category: "Library", Link: "", Description: "", Recurrence: "weekly", RecurrenceEnd: "2026-08-31" },
+];
 
 // ============================================================
 // UTILITIES
@@ -392,21 +412,21 @@ function EventCard({ event, distance }) {
 // ============================================================
 // MAIN APP
 // ============================================================
-export default function FamilyEventsApp() {
-  const [events, setEvents] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+function FamilyEventsApp() {
+  const [events, setEvents] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState(null);
 
   // Filters
-  const [ageFilter, setAgeFilter] = useState(null); // null = all
-  const [costFilter, setCostFilter] = useState(null); // null = all, 0 = free, 10 = under $10, 999 = any
-  const [distanceFilter, setDistanceFilter] = useState(null); // null = all, miles
-  const [categoryFilter, setCategoryFilter] = useState(null);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [timeRange, setTimeRange] = useState("upcoming"); // "upcoming", "today", "thisweek", "nextweek", "thismonth"
-  const [dayFilter, setDayFilter] = useState(null); // null = all, 0 = Sun, 1 = Mon, ... 6 = Sat
+  const [ageFilter, setAgeFilter] = React.useState(null); // null = all
+  const [costFilter, setCostFilter] = React.useState(null); // null = all, 0 = free, 10 = under $10, 999 = any
+  const [distanceFilter, setDistanceFilter] = React.useState(null); // null = all, miles
+  const [categoryFilter, setCategoryFilter] = React.useState(null);
+  const [searchQuery, setSearchQuery] = React.useState("");
+  const [timeRange, setTimeRange] = React.useState("upcoming"); // "upcoming", "today", "thisweek", "nextweek", "thismonth"
+  const [dayFilter, setDayFilter] = React.useState(null); // null = all, 0 = Sun, 1 = Mon, ... 6 = Sat
 
-  useEffect(() => {
+  React.useEffect(() => {
     if (GOOGLE_SHEET_CSV_URL) {
       Papa.parse(GOOGLE_SHEET_CSV_URL, {
         download: true,
@@ -436,14 +456,14 @@ export default function FamilyEventsApp() {
     }
   }, []);
 
-  const eventsWithDistance = useMemo(() => {
+  const eventsWithDistance = React.useMemo(() => {
     return events.map(e => ({
       ...e,
       distance: getDistance(USER_LAT, USER_LNG, e.Lat, e.Lng)
     }));
   }, [events]);
 
-  const filteredEvents = useMemo(() => {
+  const filteredEvents = React.useMemo(() => {
     let filtered = eventsWithDistance;
 
     // Time range filter
@@ -524,7 +544,7 @@ export default function FamilyEventsApp() {
     return filtered;
   }, [eventsWithDistance, ageFilter, costFilter, distanceFilter, categoryFilter, searchQuery, timeRange, dayFilter]);
 
-  const categories = useMemo(() => {
+  const categories = React.useMemo(() => {
     const cats = [...new Set(events.map(e => e.Category))].filter(Boolean);
     return cats.sort();
   }, [events]);
@@ -856,9 +876,7 @@ export default function FamilyEventsApp() {
   );
 }
 
-  </script>
-  <script type="text/babel">
-    ReactDOM.render(React.createElement(FamilyEventsApp), document.getElementById('root'));
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(FamilyEventsApp));
   </script>
 </body>
 </html>
